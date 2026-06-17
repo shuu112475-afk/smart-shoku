@@ -19,6 +19,7 @@ export default function ShoppingPage() {
   const requestLocation = useCallback(() => {
     setGeoReady(false);
     setGeoError(false);
+    setUserPos(null);
     setStores([]);
 
     if (!navigator.geolocation) {
@@ -27,17 +28,43 @@ export default function ShoppingPage() {
       return;
     }
 
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setUserPos({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+    let watchId: number;
+    let bestPos: GeolocationPosition | null = null;
+    let done = false;
+
+    const finish = (forceError = false) => {
+      if (done) return;
+      done = true;
+      navigator.geolocation.clearWatch(watchId);
+
+      // 精度が1000m超は「ネットワーク位置情報（不正確）」なので拒否
+      if (bestPos && bestPos.coords.accuracy <= 1000) {
+        setUserPos({ lat: bestPos.coords.latitude, lng: bestPos.coords.longitude });
         setGeoError(false);
-        setGeoReady(true);
+      } else {
+        setGeoError(true);
+      }
+      if (forceError) setGeoError(true);
+      setGeoReady(true);
+    };
+
+    // 20秒後に強制終了（GPS未取得のまま待ち続けない）
+    const timer = setTimeout(() => finish(), 20000);
+
+    watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        bestPos = pos;
+        // GPS精度200m以内が取れたら即確定
+        if (pos.coords.accuracy <= 200) {
+          clearTimeout(timer);
+          finish();
+        }
       },
       () => {
-        setGeoError(true);
-        setGeoReady(true);
+        clearTimeout(timer);
+        finish(true);
       },
-      { timeout: 15000, maximumAge: 0, enableHighAccuracy: true }
+      { enableHighAccuracy: true, maximumAge: 0 }
     );
   }, []);
 
@@ -85,7 +112,8 @@ export default function ShoppingPage() {
               <div className="rounded-2xl bg-gray-100 flex items-center justify-center" style={{ height: 320 }}>
                 <div className="text-center text-gray-400">
                   <div className="w-8 h-8 border-2 border-green-400 border-t-transparent rounded-full animate-spin mx-auto mb-2" />
-                  <p className="text-sm">位置情報を取得中...</p>
+                  <p className="text-sm font-medium">GPS信号を取得中...</p>
+                  <p className="text-xs mt-1">屋外だと取得が速くなります</p>
                 </div>
               </div>
             )}
@@ -96,15 +124,13 @@ export default function ShoppingPage() {
                 <div className="text-4xl mb-3">📍</div>
                 <p className="text-orange-800 font-semibold mb-1">位置情報が取得できませんでした</p>
                 <p className="text-orange-600 text-sm mb-4">
-                  スマホの設定でブラウザの位置情報アクセスを許可してください
+                  GPS信号が弱い、または位置情報の許可が必要です
                 </p>
-                <div className="text-left bg-white rounded-xl p-4 text-xs text-gray-600 mb-4 space-y-1">
-                  <p className="font-semibold text-gray-700">許可する手順（iPhone）</p>
-                  <p>① 設定 → Safari → 位置情報</p>
-                  <p>② 「確認」または「許可」に変更</p>
-                  <p className="font-semibold text-gray-700 pt-1">許可する手順（Android）</p>
-                  <p>① 設定 → アプリ → Chrome → 権限</p>
-                  <p>② 「位置情報」→ 許可</p>
+                <div className="text-left bg-white rounded-xl p-4 text-xs text-gray-600 mb-4 space-y-2">
+                  <p className="font-semibold text-gray-700">よくある原因と対処法</p>
+                  <p>📡 <span className="font-medium">屋内・地下</span>はGPS電波が届きにくいため、<strong>屋外</strong>で試してください</p>
+                  <p>🔒 <span className="font-medium">iPhone</span>：設定 → Safari → 位置情報 →「このアプリの使用中」</p>
+                  <p>🔒 <span className="font-medium">Android</span>：設定 → アプリ → Chrome → 権限 → 位置情報 → 許可</p>
                 </div>
                 <button
                   onClick={requestLocation}
