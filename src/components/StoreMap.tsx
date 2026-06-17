@@ -9,6 +9,22 @@ import {
 import { useState, useEffect, useCallback } from "react";
 import { Supermarket, WeekDay } from "@/types";
 
+function getSaleDays(name: string): Record<WeekDay, string[]> {
+  if (name.includes("イオン") || name.includes("AEON"))
+    return { 月: ["精肉20%オフ"], 火: [], 水: ["水産物特売", "野菜半額"], 木: [], 金: ["お弁当割引"], 土: ["週末特売", "卵特価"], 日: ["日曜市"] };
+  if (name.includes("ライフ"))
+    return { 月: [], 火: ["火曜市", "豆腐・納豆特価"], 水: [], 木: ["木曜特売", "精肉割引"], 金: [], 土: ["鮮魚特売"], 日: ["惣菜割引"] };
+  if (name.includes("業務"))
+    return { 月: [], 火: [], 水: [], 木: [], 金: ["週末前特売"], 土: [], 日: [] };
+  if (name.includes("マックスバリュ") || name.includes("マルエツ"))
+    return { 月: [], 火: ["火曜特売"], 水: ["野菜半額"], 木: [], 金: ["金曜特売"], 土: [], 日: [] };
+  if (name.includes("コープ") || name.includes("生協"))
+    return { 月: [], 火: [], 水: ["水曜特売"], 木: [], 金: [], 土: ["週末特売"], 日: [] };
+  if (name.includes("ヤオコー") || name.includes("西友") || name.includes("サミット"))
+    return { 月: [], 火: ["火曜特売"], 水: [], 木: [], 金: ["金曜特売"], 土: [], 日: [] };
+  return { 月: [], 火: [], 水: ["水曜特売"], 木: [], 金: [], 土: ["週末特売"], 日: [] };
+}
+
 // 全ピンが収まるようboundsを調整
 function BoundsFitter({
   stores,
@@ -59,30 +75,90 @@ export default function StoreMap({ today, userLat, userLng, onStoresLoaded }: Pr
     ? { lat: userLat, lng: userLng }
     : { lat: 35.6762, lng: 139.6503 };
 
-  // サーバーAPI経由で近隣スーパーを取得
+  // ブラウザから直接 Places API を呼び出す（HTTPリファラー制限を自動的に満たす）
   useEffect(() => {
-    if (!userLat || !userLng) return;
-    const url = `/api/supermarkets?lat=${userLat}&lng=${userLng}`;
-    fetch(url)
+    if (!userLat || !userLng || !apiKey) return;
+
+    const fieldMask = [
+      "places.id",
+      "places.displayName",
+      "places.location",
+      "places.rating",
+      "places.shortFormattedAddress",
+      "places.currentOpeningHours",
+    ].join(",");
+
+    fetch(`https://places.googleapis.com/v1/places:searchNearby?key=${apiKey}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Goog-FieldMask": fieldMask,
+      },
+      body: JSON.stringify({
+        includedTypes: ["supermarket", "grocery_store"],
+        maxResultCount: 8,
+        languageCode: "ja",
+        locationRestriction: {
+          circle: {
+            center: { latitude: userLat, longitude: userLng },
+            radiusMeters: 2000,
+          },
+        },
+      }),
+    })
       .then((r) => {
-        if (!r.ok) throw new Error(`${r.status}`);
+        if (!r.ok) throw new Error(`Places API ${r.status}`);
         return r.json();
       })
       .then((data) => {
-        const supermarkets = (data.supermarkets ?? []) as Supermarket[];
-        setStores(supermarkets);
-        onStoresLoaded?.(supermarkets);
-        if (data.error) {
-          setFetchError("近隣の店舗情報を取得できませんでした");
-        } else {
-          setFetchError(null);
-        }
+        const places = (data.places ?? []) as Array<{
+          id?: string;
+          displayName?: { text: string };
+          location?: { latitude: number; longitude: number };
+          rating?: number;
+          shortFormattedAddress?: string;
+          currentOpeningHours?: { openNow?: boolean };
+        }>;
+
+        const stores: Supermarket[] = places
+          .map((place) => {
+            const slat = place.location?.latitude ?? userLat;
+            const slng = place.location?.longitude ?? userLng;
+            const dist = Math.round(
+              Math.sqrt(
+                Math.pow((slat - userLat) * 111000, 2) +
+                  Math.pow((slng - userLng) * 91000, 2)
+              )
+            );
+            const name = place.displayName?.text ?? "スーパー";
+            return {
+              id: place.id ?? String(Math.random()),
+              name,
+              address: place.shortFormattedAddress ?? "",
+              lat: slat,
+              lng: slng,
+              distance: dist,
+              rating: place.rating,
+              openingHours:
+                place.currentOpeningHours?.openNow === true
+                  ? "営業中"
+                  : place.currentOpeningHours?.openNow === false
+                  ? "営業時間外"
+                  : undefined,
+              saleDays: getSaleDays(name),
+            } as Supermarket;
+          })
+          .sort((a, b) => (a.distance ?? 0) - (b.distance ?? 0));
+
+        setStores(stores);
+        onStoresLoaded?.(stores);
+        setFetchError(null);
       })
       .catch((e) => {
-        console.error("Store fetch error:", e);
+        console.error("Places API error:", e);
         setFetchError("店舗情報の取得に失敗しました");
       });
-  }, [userLat, userLng]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [userLat, userLng, apiKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handlePinClick = useCallback((store: Supermarket) => {
     if (selectedId === store.id) {
