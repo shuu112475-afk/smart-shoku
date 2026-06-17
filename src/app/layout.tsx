@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "スマート食卓ナビ",
+  title: "トクメシ",
   description: "位置情報と AI で、ダイエットに最適な週間献立と買い物を提案",
 };
 

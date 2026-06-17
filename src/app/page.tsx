@@ -48,7 +48,7 @@ export default function HomePage() {
       <div className="bg-gradient-to-r from-green-500 to-emerald-500 px-5 pt-10 pb-8">
         <p className="text-green-100 text-sm">今日は{today}曜日</p>
         <h1 className="text-2xl font-bold text-white mt-1">
-          スマート食卓ナビ
+          トクメシ
         </h1>
         {calorieResult && (
           <div className="bg-white/20 rounded-xl px-4 py-2 mt-3 inline-block">
