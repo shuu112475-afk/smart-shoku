@@ -3,9 +3,18 @@ import { NextRequest } from "next/server";
 
 export const maxDuration = 60;
 
-const client = new Anthropic();
-
 export async function POST(req: NextRequest) {
+  // APIキーの存在確認（リクエスト時に確認）
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    return new Response(
+      'data: {"error":"ANTHROPIC_API_KEY が Vercel の環境変数に設定されていません"}\n\ndata: [DONE]\n\n',
+      { headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" } }
+    );
+  }
+
+  const client = new Anthropic({ apiKey });
+
   const { targetCalories, excludedIngredients, weeklyBudget, saleInfo } =
     await req.json();
 
@@ -47,19 +56,18 @@ export async function POST(req: NextRequest) {
       const send = (data: object) =>
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
 
+      const keepAlive = setInterval(() => {
+        controller.enqueue(encoder.encode(": ping\n\n"));
+      }, 5000);
+
       try {
         let fullText = "";
 
         const messageStream = client.messages.stream({
           model: "claude-sonnet-4-6",
-          max_tokens: 4096,
+          max_tokens: 8192,
           messages: [{ role: "user", content: prompt }],
         });
-
-        // 5秒ごとにkeep-aliveを送信して接続を維持
-        const keepAlive = setInterval(() => {
-          controller.enqueue(encoder.encode(": ping\n\n"));
-        }, 5000);
 
         for await (const chunk of messageStream) {
           if (
@@ -70,21 +78,25 @@ export async function POST(req: NextRequest) {
           }
         }
 
-        clearInterval(keepAlive);
-
         const jsonMatch = fullText.match(/\{[\s\S]*\}/);
         if (!jsonMatch) {
           send({ error: "AIの返答形式が不正です。もう一度お試しください。" });
-          controller.close();
           return;
         }
 
-        const menu = JSON.parse(jsonMatch[0]);
-        send({ menu });
+        try {
+          const menu = JSON.parse(jsonMatch[0]);
+          send({ menu });
+        } catch {
+          send({ error: "JSON解析エラー。もう一度お試しください。" });
+        }
       } catch (error) {
         console.error("Claude API error:", error);
-        send({ error: "献立の生成に失敗しました。もう一度お試しください。" });
+        const msg = error instanceof Error ? error.message : String(error);
+        // 原因が分かるエラーメッセージを返す（個人アプリのためデバッグ情報を含む）
+        send({ error: `API呼び出し失敗: ${msg.slice(0, 120)}` });
       } finally {
+        clearInterval(keepAlive);
         controller.enqueue(encoder.encode("data: [DONE]\n\n"));
         controller.close();
       }

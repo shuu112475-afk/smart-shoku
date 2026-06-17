@@ -32,7 +32,8 @@ export const useUserStore = create<UserStore>()(
           profile.activityLevel,
           profile.goal
         );
-        set({ profile, calorieResult });
+        // プロフィール変更時は既存メニューをクリアして再生成を促す
+        set({ profile, calorieResult, weeklyMenu: null, shoppingList: [] });
       },
 
       setWeeklyMenu: (menu) => set({ weeklyMenu: menu }),
