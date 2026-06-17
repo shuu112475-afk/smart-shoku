@@ -95,19 +95,6 @@ async function fetchFromPlacesNew(lat: number, lng: number): Promise<Supermarket
     .sort((a, b) => (a.distance ?? 0) - (b.distance ?? 0));
 }
 
-const FALLBACK: Supermarket[] = [
-  {
-    id: "mock-1",
-    name: "近隣スーパー",
-    address: "位置情報を許可すると実際の店舗が表示されます",
-    lat: 35.6762,
-    lng: 139.6503,
-    saleDays: { 月: [], 火: [], 水: ["水曜特売"], 木: [], 金: [], 土: ["週末特売"], 日: [] },
-    openingHours: "9:00-22:00",
-    rating: 4.0,
-  },
-];
-
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const lat = searchParams.get("lat");
@@ -120,8 +107,10 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ supermarkets, today });
     } catch (e) {
       console.error("Places API failed:", e);
+      // 失敗時は空配列を返す（東京のモックデータを表示しないため）
+      return NextResponse.json({ supermarkets: [], today, error: "店舗情報の取得に失敗しました" });
     }
   }
 
-  return NextResponse.json({ supermarkets: FALLBACK, today });
+  return NextResponse.json({ supermarkets: [], today });
 }

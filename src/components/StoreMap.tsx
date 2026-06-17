@@ -68,13 +68,15 @@ export default function StoreMap({ today, userLat, userLng, onStoresLoaded }: Pr
         if (!r.ok) throw new Error(`${r.status}`);
         return r.json();
       })
-      .then(({ supermarkets }) => {
-        const validStores = (supermarkets as Supermarket[]).filter(
-          (s) => s.id !== "mock-1"
-        );
-        setStores(validStores.length > 0 ? validStores : supermarkets);
+      .then((data) => {
+        const supermarkets = (data.supermarkets ?? []) as Supermarket[];
+        setStores(supermarkets);
         onStoresLoaded?.(supermarkets);
-        setFetchError(null);
+        if (data.error) {
+          setFetchError("近隣の店舗情報を取得できませんでした");
+        } else {
+          setFetchError(null);
+        }
       })
       .catch((e) => {
         console.error("Store fetch error:", e);
@@ -185,6 +187,13 @@ export default function StoreMap({ today, userLat, userLng, onStoresLoaded }: Pr
         <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-green-500 inline-block" />通常営業</span>
         <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-blue-500 inline-block" />現在地</span>
       </div>
+
+      {/* 店舗なし */}
+      {stores.length === 0 && !fetchError && userLat && userLng && (
+        <p className="text-center text-gray-400 text-sm py-4">
+          半径2km以内にスーパーが見つかりませんでした
+        </p>
+      )}
 
       {/* 店舗カードリスト */}
       {stores.length > 0 && (
