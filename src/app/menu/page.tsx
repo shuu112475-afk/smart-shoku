@@ -63,11 +63,41 @@ export default function MenuPage() {
         }),
       });
 
-      if (!res.ok) throw new Error("メニューの生成に失敗しました");
+      if (!res.ok || !res.body) throw new Error("メニューの生成に失敗しました");
 
-      const { menu } = await res.json();
-      setWeeklyMenu(menu as WeeklyMenu);
-      setShoppingList(extractShoppingList(menu as WeeklyMenu));
+      // ストリーミングレスポンスを読み取る
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const data = line.slice(6).trim();
+          if (data === "[DONE]") break;
+          if (data === "") continue;
+
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed.error) throw new Error(parsed.error);
+            if (parsed.menu) {
+              setWeeklyMenu(parsed.menu as WeeklyMenu);
+              setShoppingList(extractShoppingList(parsed.menu as WeeklyMenu));
+            }
+          } catch (parseErr) {
+            if (parseErr instanceof Error && parseErr.message !== "Unexpected end of JSON input") {
+              throw parseErr;
+            }
+          }
+        }
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "エラーが発生しました");
     } finally {

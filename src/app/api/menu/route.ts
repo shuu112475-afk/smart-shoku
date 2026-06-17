@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 
 export const maxDuration = 60;
 
@@ -37,50 +37,65 @@ export async function POST(req: NextRequest) {
 - 朝食400kcal前後、昼食500kcal前後、夕食は残りカロリーで調整
 - 食材の分量は1人分の具体的な数値（150g、大さじ1、2個など）
 - 食材の使い回しを意識してコスト削減
-- recipeフィールドは含めない（別途取得するため）
+- recipeフィールドは含めない
 - 栄養バランスを考慮`;
 
-  try {
-    const message = await client.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 4096,
-      messages: [{ role: "user", content: prompt }],
-    });
+  const encoder = new TextEncoder();
 
-    if (message.stop_reason === "max_tokens") {
-      return NextResponse.json(
-        { error: "レスポンスが長すぎました。もう一度お試しください。" },
-        { status: 500 }
-      );
-    }
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (data: object) =>
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
 
-    const text =
-      message.content[0].type === "text" ? message.content[0].text : "";
+      try {
+        let fullText = "";
 
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      return NextResponse.json(
-        { error: "AIの返答形式が不正です。もう一度お試しください。" },
-        { status: 500 }
-      );
-    }
+        const messageStream = client.messages.stream({
+          model: "claude-sonnet-4-6",
+          max_tokens: 4096,
+          messages: [{ role: "user", content: prompt }],
+        });
 
-    let menu;
-    try {
-      menu = JSON.parse(jsonMatch[0]);
-    } catch {
-      return NextResponse.json(
-        { error: "JSONの解析に失敗しました。もう一度お試しください。" },
-        { status: 500 }
-      );
-    }
+        // 5秒ごとにkeep-aliveを送信して接続を維持
+        const keepAlive = setInterval(() => {
+          controller.enqueue(encoder.encode(": ping\n\n"));
+        }, 5000);
 
-    return NextResponse.json({ menu });
-  } catch (error) {
-    console.error("Claude API error:", error);
-    return NextResponse.json(
-      { error: "献立の生成に失敗しました。もう一度お試しください。" },
-      { status: 500 }
-    );
-  }
+        for await (const chunk of messageStream) {
+          if (
+            chunk.type === "content_block_delta" &&
+            chunk.delta.type === "text_delta"
+          ) {
+            fullText += chunk.delta.text;
+          }
+        }
+
+        clearInterval(keepAlive);
+
+        const jsonMatch = fullText.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) {
+          send({ error: "AIの返答形式が不正です。もう一度お試しください。" });
+          controller.close();
+          return;
+        }
+
+        const menu = JSON.parse(jsonMatch[0]);
+        send({ menu });
+      } catch (error) {
+        console.error("Claude API error:", error);
+        send({ error: "献立の生成に失敗しました。もう一度お試しください。" });
+      } finally {
+        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    },
+  });
 }
