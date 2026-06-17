@@ -9,91 +9,6 @@ import {
 import { useState, useEffect, useCallback } from "react";
 import { Supermarket, WeekDay } from "@/types";
 
-function getSaleDays(name: string): Record<WeekDay, string[]> {
-  if (name.includes("イオン") || name.includes("AEON"))
-    return { 月: ["精肉20%オフ"], 火: [], 水: ["水産物特売", "野菜半額"], 木: [], 金: ["お弁当割引"], 土: ["週末特売", "卵特価"], 日: ["日曜市"] };
-  if (name.includes("ライフ"))
-    return { 月: [], 火: ["火曜市", "豆腐・納豆特価"], 水: [], 木: ["木曜特売", "精肉割引"], 金: [], 土: ["鮮魚特売"], 日: ["惣菜割引"] };
-  if (name.includes("業務"))
-    return { 月: [], 火: [], 水: [], 木: [], 金: ["週末前特売"], 土: [], 日: [] };
-  if (name.includes("マックスバリュ") || name.includes("マルエツ"))
-    return { 月: [], 火: ["火曜特売"], 水: ["野菜半額"], 木: [], 金: ["金曜特売"], 土: [], 日: [] };
-  if (name.includes("コープ") || name.includes("生協"))
-    return { 月: [], 火: [], 水: ["水曜特売"], 木: [], 金: [], 土: ["週末特売"], 日: [] };
-  return { 月: [], 火: [], 水: ["水曜特売"], 木: [], 金: [], 土: ["週末特売"], 日: [] };
-}
-
-// Places REST API で近隣スーパーを検索（モバイル対応）
-async function fetchNearbyStores(
-  lat: number,
-  lng: number,
-  apiKey: string
-): Promise<Supermarket[]> {
-  const res = await fetch(
-    "https://places.googleapis.com/v1/places:searchNearby",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Goog-Api-Key": apiKey,
-        "X-Goog-FieldMask":
-          "places.id,places.displayName,places.location,places.rating,places.shortFormattedAddress,places.currentOpeningHours",
-      },
-      body: JSON.stringify({
-        includedTypes: ["supermarket", "grocery_store"],
-        maxResultCount: 8,
-        languageCode: "ja",
-        locationRestriction: {
-          circle: {
-            center: { latitude: lat, longitude: lng },
-            radiusMeters: 2000,
-          },
-        },
-      }),
-    }
-  );
-
-  if (!res.ok) throw new Error(`Places API error: ${res.status}`);
-  const data = await res.json();
-
-  return (data.places ?? [])
-    .map((place: {
-      id: string;
-      displayName?: { text: string };
-      location?: { latitude: number; longitude: number };
-      rating?: number;
-      shortFormattedAddress?: string;
-      currentOpeningHours?: { openNow?: boolean };
-    }) => {
-      const slat = place.location?.latitude ?? lat;
-      const slng = place.location?.longitude ?? lng;
-      const dist = Math.round(
-        Math.sqrt(
-          Math.pow((slat - lat) * 111000, 2) +
-            Math.pow((slng - lng) * 91000, 2)
-        )
-      );
-      const name = place.displayName?.text ?? "スーパー";
-      return {
-        id: place.id ?? String(Math.random()),
-        name,
-        address: place.shortFormattedAddress ?? "",
-        lat: slat,
-        lng: slng,
-        distance: dist,
-        rating: place.rating,
-        openingHours:
-          place.currentOpeningHours?.openNow === true
-            ? "営業中"
-            : place.currentOpeningHours?.openNow === false
-            ? "営業時間外"
-            : undefined,
-        saleDays: getSaleDays(name),
-      } as Supermarket;
-    })
-    .sort((a: Supermarket, b: Supermarket) => (a.distance ?? 0) - (b.distance ?? 0));
-}
-
 // 全ピンが収まるようboundsを調整
 function BoundsFitter({
   stores,
@@ -144,20 +59,28 @@ export default function StoreMap({ today, userLat, userLng, onStoresLoaded }: Pr
     ? { lat: userLat, lng: userLng }
     : { lat: 35.6762, lng: 139.6503 };
 
-  // Places REST APIで店舗を取得
+  // サーバーAPI経由で近隣スーパーを取得
   useEffect(() => {
-    if (!userLat || !userLng || !apiKey) return;
-    fetchNearbyStores(userLat, userLng, apiKey)
-      .then((s) => {
-        setStores(s);
-        onStoresLoaded?.(s);
+    if (!userLat || !userLng) return;
+    const url = `/api/supermarkets?lat=${userLat}&lng=${userLng}`;
+    fetch(url)
+      .then((r) => {
+        if (!r.ok) throw new Error(`${r.status}`);
+        return r.json();
+      })
+      .then(({ supermarkets }) => {
+        const validStores = (supermarkets as Supermarket[]).filter(
+          (s) => s.id !== "mock-1"
+        );
+        setStores(validStores.length > 0 ? validStores : supermarkets);
+        onStoresLoaded?.(supermarkets);
         setFetchError(null);
       })
       .catch((e) => {
-        console.error("Places fetch error:", e);
+        console.error("Store fetch error:", e);
         setFetchError("店舗情報の取得に失敗しました");
       });
-  }, [userLat, userLng, apiKey, onStoresLoaded]);
+  }, [userLat, userLng]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handlePinClick = useCallback((store: Supermarket) => {
     if (selectedId === store.id) {
@@ -173,14 +96,12 @@ export default function StoreMap({ today, userLat, userLng, onStoresLoaded }: Pr
 
   return (
     <APIProvider apiKey={apiKey}>
-      {/* エラー表示 */}
       {fetchError && (
         <div className="bg-red-50 text-red-600 text-sm px-4 py-2 rounded-xl mb-3">
           {fetchError}
         </div>
       )}
 
-      {/* マップ */}
       <div className="rounded-2xl overflow-hidden border border-gray-200 shadow-sm" style={{ height: 320 }}>
         <Map defaultCenter={center} defaultZoom={14} mapId="smart-shoku-map" gestureHandling="greedy">
           <BoundsFitter stores={stores} userLat={userLat} userLng={userLng} />
@@ -231,7 +152,9 @@ export default function StoreMap({ today, userLat, userLng, onStoresLoaded }: Pr
                 <div className="flex items-center gap-2 mt-1 flex-wrap">
                   {selectedStore.distance !== undefined && (
                     <span className="text-xs text-gray-400">
-                      {selectedStore.distance >= 1000 ? `${(selectedStore.distance / 1000).toFixed(1)}km` : `${selectedStore.distance}m`}
+                      {selectedStore.distance >= 1000
+                        ? `${(selectedStore.distance / 1000).toFixed(1)}km`
+                        : `${selectedStore.distance}m`}
                     </span>
                   )}
                   {selectedStore.rating && <span className="text-xs text-amber-500">★ {selectedStore.rating}</span>}
@@ -244,7 +167,9 @@ export default function StoreMap({ today, userLat, userLng, onStoresLoaded }: Pr
                 {(selectedStore.saleDays[today] ?? []).length > 0 && (
                   <div className="mt-2 space-y-1">
                     {selectedStore.saleDays[today].map((sale, i) => (
-                      <div key={i} className="bg-amber-50 text-amber-700 text-xs px-2 py-1 rounded font-medium">🏷️ {sale}</div>
+                      <div key={i} className="bg-amber-50 text-amber-700 text-xs px-2 py-1 rounded font-medium">
+                        🏷️ {sale}
+                      </div>
                     ))}
                   </div>
                 )}
@@ -278,13 +203,17 @@ export default function StoreMap({ today, userLat, userLng, onStoresLoaded }: Pr
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-bold text-gray-800 text-sm">{store.name}</span>
-                      {hasSale && <span className="bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">本日特売</span>}
+                      {hasSale && (
+                        <span className="bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">本日特売</span>
+                      )}
                     </div>
                     <p className="text-xs text-gray-500 mt-0.5 truncate">{store.address}</p>
                     <div className="flex items-center gap-3 mt-1">
                       {store.distance !== undefined && (
                         <span className="text-xs text-gray-400">
-                          📍 {store.distance >= 1000 ? `${(store.distance / 1000).toFixed(1)}km` : `${store.distance}m`}
+                          📍 {store.distance >= 1000
+                            ? `${(store.distance / 1000).toFixed(1)}km`
+                            : `${store.distance}m`}
                         </span>
                       )}
                       {store.rating && <span className="text-xs text-amber-500">★ {store.rating}</span>}
@@ -300,7 +229,9 @@ export default function StoreMap({ today, userLat, userLng, onStoresLoaded }: Pr
                 {hasSale && (
                   <div className="flex flex-wrap gap-1 mt-2">
                     {store.saleDays[today].map((sale, i) => (
-                      <span key={i} className="bg-amber-100 text-amber-700 text-xs px-2 py-0.5 rounded-full font-medium">{sale}</span>
+                      <span key={i} className="bg-amber-100 text-amber-700 text-xs px-2 py-0.5 rounded-full font-medium">
+                        {sale}
+                      </span>
                     ))}
                   </div>
                 )}
